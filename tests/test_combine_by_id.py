@@ -8,9 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from qualisys_spike_combining.combine_by_id import (
     combine_pair,
+    expand_tsv_headers,
     extract_id,
+    normalize_output_header,
     pair_files,
     should_exclude_tsv_column,
+    tsv_column_sort_key,
 )
 
 
@@ -37,9 +40,53 @@ def test_should_exclude_tsv_column_rules() -> None:
     assert should_exclude_tsv_column("Frame")
     assert should_exclude_tsv_column("Residual")
     assert should_exclude_tsv_column("Residual_2")
+    assert should_exclude_tsv_column("MOD 1 Residual")
     assert should_exclude_tsv_column("Rot[0]")
+    assert should_exclude_tsv_column("MOD 2 Rot[8]")
     assert should_exclude_tsv_column("Unnamed_15")
     assert not should_exclude_tsv_column("MOD 1 X")
+
+
+def test_expand_tsv_headers_propagates_mod_prefix() -> None:
+    raw = ["Frame", "Time", "MOD 1 X", "Y", "Z", "Residual", "Rot[0]", "", "MOD 2 X", "Y"]
+    expanded = expand_tsv_headers(raw)
+    assert expanded == [
+        "Frame",
+        "Time",
+        "MOD 1 X",
+        "MOD 1 Y",
+        "MOD 1 Z",
+        "MOD 1 Residual",
+        "MOD 1 Rot[0]",
+        "",
+        "MOD 2 X",
+        "MOD 2 Y",
+    ]
+
+
+def test_normalize_output_header_uses_underscores() -> None:
+    assert normalize_output_header("MOD 1 X") == "MOD_1_X"
+    assert normalize_output_header("1 Ref") == "1_Ref"
+
+
+def test_tsv_column_sort_key_orders_by_mod_then_field() -> None:
+    headers = [
+        "MOD 7 Z",
+        "MOD 1 Y",
+        "MOD 1 X",
+        "MOD 4 Roll",
+        "MOD 2 X",
+        "MOD 7 X",
+    ]
+    ordered = sorted(headers, key=tsv_column_sort_key)
+    assert ordered == [
+        "MOD 1 X",
+        "MOD 1 Y",
+        "MOD 2 X",
+        "MOD 4 Roll",
+        "MOD 7 X",
+        "MOD 7 Z",
+    ]
 
 
 def test_combine_pair_filters_columns_and_uses_overlap(tmp_path: Path) -> None:
@@ -49,12 +96,12 @@ def test_combine_pair_filters_columns_and_uses_overlap(tmp_path: Path) -> None:
 
     _write_tsv(
         tsv,
-        header=["Frame", "Time", "MOD 1 X", "Residual", "Rot[0]", "", "Y"],
+        header=["Frame", "Time", "MOD 1 X", "Y", "Residual", "Rot[0]", ""],
         rows=[
-            ["1", "0.00", "10", "0.1", "1", "", "100"],
-            ["2", "0.01", "11", "0.1", "1", "", "101"],
-            ["3", "0.02", "12", "0.1", "1", "", "102"],
-            ["4", "0.03", "13", "0.1", "1", "", "103"],
+            ["1", "0.00", "10", "100", "0.1", "1", ""],
+            ["2", "0.01", "11", "101", "0.1", "1", ""],
+            ["3", "0.02", "12", "102", "0.1", "1", ""],
+            ["4", "0.03", "13", "103", "0.1", "1", ""],
         ],
     )
     _write_txt(
@@ -79,7 +126,7 @@ def test_combine_pair_filters_columns_and_uses_overlap(tmp_path: Path) -> None:
         header = next(reader)
         rows = list(reader)
 
-    assert header == ["Time", "tsv_MOD 1 X", "tsv_Y", "txt_load_a", "txt_load_b"]
+    assert header == ["Time", "MOD_1_X", "MOD_1_Y", "load_a", "load_b"]
     assert rows[0] == ["0.01", "11", "101", "1", "2"]
     assert rows[-1] == ["0.03", "13", "103", "5", "6"]
 

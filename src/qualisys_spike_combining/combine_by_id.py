@@ -59,6 +59,44 @@ def unique_headers(raw_headers: Sequence[str]) -> List[str]:
     return result
 
 
+def expand_tsv_headers(raw_headers: Sequence[str]) -> List[str]:
+    """
+    Expand compact Qualisys headers so per-body fields are explicit.
+
+    Example block:
+      MOD 1 X, Y, Z, Roll, ...
+    becomes:
+      MOD 1 X, MOD 1 Y, MOD 1 Z, MOD 1 Roll, ...
+    """
+    expanded: List[str] = []
+    current_prefix: str | None = None
+    field_pattern = re.compile(r"^(X|Y|Z|Roll|Pitch|Yaw|Residual|Rot\[\d+\])$")
+    prefixed_pattern = re.compile(
+        r"^(.+)\s+(X|Y|Z|Roll|Pitch|Yaw|Residual|Rot\[\d+\])$"
+    )
+
+    for cell in raw_headers:
+        header = cell.strip()
+        if not header:
+            expanded.append(header)
+            current_prefix = None
+            continue
+
+        prefixed_match = prefixed_pattern.match(header)
+        if prefixed_match:
+            current_prefix = prefixed_match.group(1).strip()
+            expanded.append(header)
+            continue
+
+        if current_prefix and field_pattern.match(header):
+            expanded.append(f"{current_prefix} {header}")
+            continue
+
+        expanded.append(header)
+
+    return expanded
+
+
 def extract_id(stem: str) -> str | None:
     """
     Extract pair ID from filename stem.
@@ -82,7 +120,7 @@ def read_tsv(tsv_path: Path) -> Tuple[List[str], List[List[str]], List[float], i
         raise ValueError(f"{tsv_path.name}: fewer than 13 rows; cannot read table.")
 
     header_row = next(csv.reader([lines[12]], delimiter="\t"))
-    headers = unique_headers(header_row)
+    headers = unique_headers(expand_tsv_headers(header_row))
 
     try:
         time_idx = headers.index("Time")
@@ -163,9 +201,38 @@ def should_exclude_tsv_column(header: str) -> bool:
         header == "Frame"
         or header.startswith("Frame_")
         or header.startswith("Unnamed_")
-        or header.startswith("Residual")
-        or header.startswith("Rot[")
+        or "Residual" in header
+        or "Rot[" in header
     )
+
+
+def normalize_output_header(header: str) -> str:
+    """Normalize output header to underscore-separated style."""
+    normalized = re.sub(r"\s+", "_", header.strip())
+    normalized = re.sub(r"_+", "_", normalized)
+    return normalized
+
+
+def tsv_column_sort_key(header: str) -> tuple[int, int, int, str]:
+    """
+    Sort MOD columns as MOD 1..7 and X/Y/Z/Roll/Pitch/Yaw order.
+    Non-MOD columns are kept after MOD columns.
+    """
+    mod_match = re.match(r"^MOD\s+(\d+)\s+(.+)$", header.strip())
+    if not mod_match:
+        return (1, 9999, 9999, header)
+
+    mod_num = int(mod_match.group(1))
+    field = mod_match.group(2).strip()
+    field_order = {
+        "X": 0,
+        "Y": 1,
+        "Z": 2,
+        "Roll": 3,
+        "Pitch": 4,
+        "Yaw": 5,
+    }
+    return (0, mod_num, field_order.get(field, 999), field)
 
 
 def build_overlap_map(
@@ -232,12 +299,13 @@ def combine_pair(
         for i in range(len(tsv_headers))
         if i != tsv_time_idx and not should_exclude_tsv_column(tsv_headers[i])
     ]
+    tsv_keep_indices.sort(key=lambda i: tsv_column_sort_key(tsv_headers[i]))
     txt_keep_indices = [i for i in range(len(txt_headers)) if i != txt_time_idx]
 
     out_headers = (
         ["Time"]
-        + [f"tsv_{tsv_headers[i]}" for i in tsv_keep_indices]
-        + [f"txt_{txt_headers[i]}" for i in txt_keep_indices]
+        + [normalize_output_header(tsv_headers[i]) for i in tsv_keep_indices]
+        + [normalize_output_header(txt_headers[i]) for i in txt_keep_indices]
     )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
