@@ -393,6 +393,18 @@ def pair_files(input_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]:
     return tsv_by_id, txt_by_id
 
 
+def output_name_for_pair(txt_path: Path, pair_id: str) -> str:
+    """
+    Build output filename for a paired run.
+    Prefer the TXT stem to preserve source naming, e.g.:
+      Focused Wave_001.txt -> Focused Wave_001_combined.txt
+    """
+    txt_stem = txt_path.stem.strip()
+    if txt_stem:
+        return f"{txt_stem}_combined.txt"
+    return f"{pair_id}_combined.txt"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     input_dir: Path = args.input_dir
@@ -423,7 +435,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for pair_id in common_ids:
         tsv_path = tsv_by_id[pair_id]
         txt_path = txt_by_id[pair_id]
-        out_path = output_dir / f"{pair_id}_combined.txt"
+        out_path = output_dir / output_name_for_pair(txt_path=txt_path, pair_id=pair_id)
 
         try:
             rows, start_time, end_time = combine_pair(

@@ -11,6 +11,7 @@ from qualisys_spike_combining.combine_by_id import (
     expand_tsv_headers,
     extract_id,
     normalize_output_header,
+    output_name_for_pair,
     pair_files,
     should_exclude_tsv_column,
     tsv_column_sort_key,
@@ -92,6 +93,13 @@ def test_tsv_column_sort_key_orders_by_mod_then_field() -> None:
         "MOD 7 X",
         "MOD 7 Z",
     ]
+
+
+def test_output_name_for_pair_prefers_txt_stem() -> None:
+    assert (
+        output_name_for_pair(Path("Focused Wave_001.txt"), pair_id="1")
+        == "Focused Wave_001_combined.txt"
+    )
 
 
 def test_combine_pair_filters_columns_and_uses_overlap(tmp_path: Path) -> None:
