@@ -33,6 +33,8 @@ def _write_txt(path: Path, header: list[str], rows: list[list[str]]) -> None:
 def test_extract_id_supports_expected_patterns() -> None:
     assert extract_id("T70_10001") == "10001"
     assert extract_id("T70_10001_6D") == "10001"
+    assert extract_id("Focused Wave_001") == "1"
+    assert extract_id("Focued Wave0001_6D") == "1"
     assert extract_id("other_name") is None
 
 
@@ -67,6 +69,9 @@ def test_expand_tsv_headers_propagates_mod_prefix() -> None:
 def test_normalize_output_header_uses_underscores() -> None:
     assert normalize_output_header("MOD 1 X") == "MOD_1_X"
     assert normalize_output_header("1 Ref") == "1_Ref"
+    assert normalize_output_header("semi-sub X", source="tsv") == "semi_X"
+    assert normalize_output_header("715", source="txt") == "wp15"
+    assert normalize_output_header("704", source="txt") == "wp4"
 
 
 def test_tsv_column_sort_key_orders_by_mod_then_field() -> None:
@@ -135,8 +140,12 @@ def test_pair_files_groups_by_numeric_id(tmp_path: Path) -> None:
     (tmp_path / "T70_10001_6D.tsv").write_text("", encoding="utf-8")
     (tmp_path / "T70_10001.txt").write_text("", encoding="utf-8")
     (tmp_path / "T70_10002_6D.tsv").write_text("", encoding="utf-8")
+    (tmp_path / "Focused Wave0001_6D.tsv").write_text("", encoding="utf-8")
+    (tmp_path / "Focused Wave_001.txt").write_text("", encoding="utf-8")
+    (tmp_path / "Focused Wave0003_6D.tsv").write_text("", encoding="utf-8")
+    (tmp_path / "Focused Wave_003.txt").write_text("", encoding="utf-8")
     (tmp_path / "ignore.csv").write_text("", encoding="utf-8")
 
     tsv_map, txt_map = pair_files(tmp_path)
-    assert sorted(tsv_map.keys()) == ["10001", "10002"]
-    assert sorted(txt_map.keys()) == ["10001"]
+    assert sorted(tsv_map.keys()) == ["1", "10001", "10002", "3"]
+    assert sorted(txt_map.keys()) == ["1", "10001", "3"]

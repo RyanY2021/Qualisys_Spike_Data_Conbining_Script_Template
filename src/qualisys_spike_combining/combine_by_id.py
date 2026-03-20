@@ -103,9 +103,14 @@ def extract_id(stem: str) -> str | None:
     Examples:
       T70_10001       -> 10001
       T70_10001_6D    -> 10001
+      Focused Wave_001 -> 1
+      Focued Wave0001_6D -> 1
     """
-    match = re.search(r"_(\d+)(?:_6D)?$", stem, flags=re.IGNORECASE)
-    return match.group(1) if match else None
+    match = re.search(r"(\d+)(?:_6D)?$", stem, flags=re.IGNORECASE)
+    if not match:
+        return None
+    # Normalize leading-zero variants (001 vs 0001) to one pairing ID.
+    return str(int(match.group(1)))
 
 
 def read_tsv(tsv_path: Path) -> Tuple[List[str], List[List[str]], List[float], int]:
@@ -197,33 +202,44 @@ def time_key(time_value: float, decimals: int) -> str:
 
 def should_exclude_tsv_column(header: str) -> bool:
     """Columns to drop from TSV before merging."""
+    normalized = header.strip().lower()
     return (
-        header == "Frame"
-        or header.startswith("Frame_")
-        or header.startswith("Unnamed_")
-        or "Residual" in header
-        or "Rot[" in header
+        normalized == "frame"
+        or normalized.startswith("frame_")
+        or normalized.startswith("unnamed_")
+        or "residual" in normalized
+        or "rot[" in normalized
     )
 
 
-def normalize_output_header(header: str) -> str:
-    """Normalize output header to underscore-separated style."""
-    normalized = re.sub(r"\s+", "_", header.strip())
+def normalize_output_header(header: str, source: str = "generic") -> str:
+    """
+    Normalize output header to underscore-separated style.
+
+    source='tsv':
+      semi-sub X -> semi_X
+    source='txt':
+      715 -> wp15, 704 -> wp4
+    """
+    working = header.strip()
+
+    if source == "tsv":
+        # New branch format: collapse semi-sub marker prefix to semi.
+        semi_match = re.match(r"^semi(?:-sub)?\s+(.+)$", working, flags=re.IGNORECASE)
+        if semi_match:
+            working = f"semi {semi_match.group(1).strip()}"
+    elif source == "txt" and re.fullmatch(r"\d+", working):
+        channel = int(working)
+        if 701 <= channel <= 799:
+            return f"wp{channel - 700}"
+
+    normalized = re.sub(r"\s+", "_", working)
     normalized = re.sub(r"_+", "_", normalized)
     return normalized
 
 
-def tsv_column_sort_key(header: str) -> tuple[int, int, int, str]:
-    """
-    Sort MOD columns as MOD 1..7 and X/Y/Z/Roll/Pitch/Yaw order.
-    Non-MOD columns are kept after MOD columns.
-    """
-    mod_match = re.match(r"^MOD\s+(\d+)\s+(.+)$", header.strip())
-    if not mod_match:
-        return (1, 9999, 9999, header)
-
-    mod_num = int(mod_match.group(1))
-    field = mod_match.group(2).strip()
+def non_mod_tsv_column_sort_key(header: str) -> tuple[int, int, int, str]:
+    """Sort non-MOD body columns by position field order when possible."""
     field_order = {
         "X": 0,
         "Y": 1,
@@ -232,7 +248,35 @@ def tsv_column_sort_key(header: str) -> tuple[int, int, int, str]:
         "Pitch": 4,
         "Yaw": 5,
     }
-    return (0, mod_num, field_order.get(field, 999), field)
+    prefixed_match = re.match(r"^(.+)\s+(X|Y|Z|Roll|Pitch|Yaw)$", header.strip())
+    if not prefixed_match:
+        return (2, 9999, 9999, header)
+
+    prefix = prefixed_match.group(1).strip()
+    field = prefixed_match.group(2).strip()
+    return (1, 0, field_order.get(field, 999), prefix)
+
+
+def tsv_column_sort_key(header: str) -> tuple[int, int, int, str]:
+    """
+    Sort MOD columns as MOD 1..7 and X/Y/Z/Roll/Pitch/Yaw order.
+    Then sort non-MOD body columns by field order (X/Y/Z/Roll/Pitch/Yaw).
+    """
+    mod_match = re.match(r"^MOD\s+(\d+)\s+(.+)$", header.strip())
+    if mod_match:
+        mod_num = int(mod_match.group(1))
+        field = mod_match.group(2).strip()
+        field_order = {
+            "X": 0,
+            "Y": 1,
+            "Z": 2,
+            "Roll": 3,
+            "Pitch": 4,
+            "Yaw": 5,
+        }
+        return (0, mod_num, field_order.get(field, 999), field)
+
+    return non_mod_tsv_column_sort_key(header)
 
 
 def build_overlap_map(
@@ -304,8 +348,8 @@ def combine_pair(
 
     out_headers = (
         ["Time"]
-        + [normalize_output_header(tsv_headers[i]) for i in tsv_keep_indices]
-        + [normalize_output_header(txt_headers[i]) for i in txt_keep_indices]
+        + [normalize_output_header(tsv_headers[i], source="tsv") for i in tsv_keep_indices]
+        + [normalize_output_header(txt_headers[i], source="txt") for i in txt_keep_indices]
     )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
