@@ -9,10 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from qualisys_spike_combining.combine_by_id import (
     combine_pair,
     expand_tsv_headers,
+    extract_pair_key,
     extract_id,
     normalize_output_header,
+    normalize_series_name,
     output_name_for_pair,
     pair_files,
+    should_exclude_txt_column,
     should_exclude_tsv_column,
     tsv_column_sort_key,
 )
@@ -39,6 +42,20 @@ def test_extract_id_supports_expected_patterns() -> None:
     assert extract_id("other_name") is None
 
 
+def test_extract_pair_key_normalizes_series_and_id() -> None:
+    assert extract_pair_key("Focued Wave0001_6D") == "focused wave::1"
+    assert extract_pair_key("Focused Wave_001") == "focused wave::1"
+    assert extract_pair_key("Free decay_006") == "free decay::6"
+    assert extract_pair_key("White Noise0002_6D") == "white noise::2"
+    assert extract_pair_key("bad_name") is None
+
+
+def test_normalize_series_name_aliases() -> None:
+    assert normalize_series_name("Focued Wave") == "focused wave"
+    assert normalize_series_name("Focused_Wave") == "focused wave"
+    assert normalize_series_name("WhiteNoise") == "white noise"
+
+
 def test_should_exclude_tsv_column_rules() -> None:
     assert should_exclude_tsv_column("Frame")
     assert should_exclude_tsv_column("Residual")
@@ -48,6 +65,16 @@ def test_should_exclude_tsv_column_rules() -> None:
     assert should_exclude_tsv_column("MOD 2 Rot[8]")
     assert should_exclude_tsv_column("Unnamed_15")
     assert not should_exclude_tsv_column("MOD 1 X")
+
+
+def test_should_exclude_txt_column_rules() -> None:
+    assert should_exclude_txt_column("15 wp 15")
+    assert should_exclude_txt_column("9 wp9")
+    assert should_exclude_txt_column("1 wp1")
+    assert should_exclude_txt_column("31 Keyboard")
+    assert should_exclude_txt_column("keyboard")
+    assert not should_exclude_txt_column("715")
+    assert not should_exclude_txt_column("25 press4")
 
 
 def test_expand_tsv_headers_propagates_mod_prefix() -> None:
@@ -144,6 +171,68 @@ def test_combine_pair_filters_columns_and_uses_overlap(tmp_path: Path) -> None:
     assert rows[-1] == ["0.03", "13", "103", "5", "6"]
 
 
+def test_combine_pair_ignores_legacy_wp_columns(tmp_path: Path) -> None:
+    tsv = tmp_path / "T70_10001_6D.tsv"
+    txt = tmp_path / "T70_10001.txt"
+    out = tmp_path / "10001_combined.txt"
+
+    _write_tsv(
+        tsv,
+        header=["Frame", "Time", "MOD 1 X", "Y", "Residual", "Rot[0]", ""],
+        rows=[
+            ["1", "0.00", "10", "100", "0.1", "1", ""],
+            ["2", "0.01", "11", "101", "0.1", "1", ""],
+        ],
+    )
+    _write_txt(
+        txt,
+        header=["Time", "715", "15 wp 15", "load_a"],
+        rows=[
+            ["0.00", "5", "999", "1"],
+            ["0.01", "6", "999", "2"],
+        ],
+    )
+
+    combine_pair(tsv_path=tsv, txt_path=txt, out_path=out, decimals=2)
+
+    with out.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        header = next(reader)
+
+    assert header == ["Time", "MOD_1_X", "MOD_1_Y", "wp15", "load_a"]
+
+
+def test_combine_pair_ignores_keyboard_column(tmp_path: Path) -> None:
+    tsv = tmp_path / "T70_10001_6D.tsv"
+    txt = tmp_path / "T70_10001.txt"
+    out = tmp_path / "10001_combined.txt"
+
+    _write_tsv(
+        tsv,
+        header=["Frame", "Time", "MOD 1 X", "Y", "Residual", "Rot[0]", ""],
+        rows=[
+            ["1", "0.00", "10", "100", "0.1", "1", ""],
+            ["2", "0.01", "11", "101", "0.1", "1", ""],
+        ],
+    )
+    _write_txt(
+        txt,
+        header=["Time", "715", "31 Keyboard", "25 press4"],
+        rows=[
+            ["0.00", "5", "1", "7"],
+            ["0.01", "6", "1", "8"],
+        ],
+    )
+
+    combine_pair(tsv_path=tsv, txt_path=txt, out_path=out, decimals=2)
+
+    with out.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        header = next(reader)
+
+    assert header == ["Time", "MOD_1_X", "MOD_1_Y", "wp15", "25_press4"]
+
+
 def test_pair_files_groups_by_numeric_id(tmp_path: Path) -> None:
     (tmp_path / "T70_10001_6D.tsv").write_text("", encoding="utf-8")
     (tmp_path / "T70_10001.txt").write_text("", encoding="utf-8")
@@ -155,5 +244,10 @@ def test_pair_files_groups_by_numeric_id(tmp_path: Path) -> None:
     (tmp_path / "ignore.csv").write_text("", encoding="utf-8")
 
     tsv_map, txt_map = pair_files(tmp_path)
-    assert sorted(tsv_map.keys()) == ["1", "10001", "10002", "3"]
-    assert sorted(txt_map.keys()) == ["1", "10001", "3"]
+    assert sorted(tsv_map.keys()) == [
+        "focused wave::1",
+        "focused wave::3",
+        "t70::10001",
+        "t70::10002",
+    ]
+    assert sorted(txt_map.keys()) == ["focused wave::1", "focused wave::3", "t70::10001"]

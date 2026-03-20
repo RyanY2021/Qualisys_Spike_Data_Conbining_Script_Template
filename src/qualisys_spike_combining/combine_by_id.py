@@ -113,6 +113,44 @@ def extract_id(stem: str) -> str | None:
     return str(int(match.group(1)))
 
 
+def normalize_series_name(raw: str) -> str:
+    """Normalize experiment series names across spacing/case/typo variants."""
+    text = re.sub(r"[_\-]+", " ", raw.lower())
+    text = re.sub(r"\s+", " ", text).strip()
+    compact = re.sub(r"\s+", "", text)
+
+    aliases = {
+        "focuedwave": "focused wave",
+        "focusedwave": "focused wave",
+        "freedecay": "free decay",
+        "regularwave": "regular wave",
+        "seastate": "seastate",
+        "whitenoise": "white noise",
+    }
+    return aliases.get(compact, text)
+
+
+def extract_pair_key(stem: str) -> str | None:
+    """
+    Extract normalized pair key from filename stem.
+    Keys are '<series>::<id>', where id has no leading zeros.
+    """
+    base = stem.strip()
+    base = re.sub(r"(?i)_?6d$", "", base).strip()
+
+    match = re.search(r"(\d+)$", base)
+    if not match:
+        return None
+
+    series_raw = re.sub(r"[\s_\-]+$", "", base[: match.start()])
+    if not series_raw:
+        return None
+
+    series = normalize_series_name(series_raw)
+    pair_id = str(int(match.group(1)))
+    return f"{series}::{pair_id}"
+
+
 def read_tsv(tsv_path: Path) -> Tuple[List[str], List[List[str]], List[float], int]:
     """
     Read TSV where table header is on row 13 (1-based), data starts below it.
@@ -238,6 +276,15 @@ def normalize_output_header(header: str, source: str = "generic") -> str:
     return normalized
 
 
+def should_exclude_txt_column(header: str) -> bool:
+    """Drop duplicate WP and keyboard columns from TXT input."""
+    normalized = header.strip().lower()
+    return (
+        re.fullmatch(r"\d+\s*wp\s*\d+", normalized) is not None
+        or re.fullmatch(r"(?:\d+\s*)?keyboard", normalized) is not None
+    )
+
+
 def non_mod_tsv_column_sort_key(header: str) -> tuple[int, int, int, str]:
     """Sort non-MOD body columns by position field order when possible."""
     field_order = {
@@ -344,7 +391,11 @@ def combine_pair(
         if i != tsv_time_idx and not should_exclude_tsv_column(tsv_headers[i])
     ]
     tsv_keep_indices.sort(key=lambda i: tsv_column_sort_key(tsv_headers[i]))
-    txt_keep_indices = [i for i in range(len(txt_headers)) if i != txt_time_idx]
+    txt_keep_indices = [
+        i
+        for i in range(len(txt_headers))
+        if i != txt_time_idx and not should_exclude_txt_column(txt_headers[i])
+    ]
 
     out_headers = (
         ["Time"]
@@ -381,14 +432,14 @@ def pair_files(input_dir: Path) -> Tuple[Dict[str, Path], Dict[str, Path]]:
         if ext not in {".tsv", ".txt"}:
             continue
 
-        pair_id = extract_id(path.stem)
-        if not pair_id:
+        pair_key = extract_pair_key(path.stem)
+        if not pair_key:
             continue
 
         if ext == ".tsv":
-            tsv_by_id[pair_id] = path
+            tsv_by_id[pair_key] = path
         else:
-            txt_by_id[pair_id] = path
+            txt_by_id[pair_key] = path
 
     return tsv_by_id, txt_by_id
 
